@@ -5,12 +5,14 @@
 
 Usage: "lyxs <full or partial name of symbol>"""
 
-from pprint import pformat
-import tkinter as tk  # TODO: remove
+from io import UnsupportedOperation
 import os
+import pickle
 import subprocess
+from pprint import pformat
 from time import sleep
 from typing import List, Tuple
+from collections import defaultdict
 
 from albertv0 import *
 
@@ -27,6 +29,8 @@ HOME_DIR = os.environ["HOME"]
 PLUGIN_DIR = os.path.join(HOME_DIR, ".lyx_shortcuts_plugin")
 BINDINGS_FILE = os.path.join(PLUGIN_DIR, "all_lyx_bindings")
 
+common_bindings = None
+PICKLED_COMMON_BINDINGS = os.path.join(PLUGIN_DIR, "common_bindings")
 
 # ---------------------------------------------------------------------------- #
 #                                 API Functions                                #
@@ -38,19 +42,30 @@ def initialize():
         os.mkdir(PLUGIN_DIR)
     except FileExistsError:
         pass  # ignore - dir already exists
-    # for any other error: let it be raised. trace is available in Albert Python extension settings.
+    # other exceptions are raised to logs
 
     bindings = collect_bindings()
     with open(BINDINGS_FILE, "w+") as f:
         f.write(bindings)
 
+    global common_bindings
+    with open(PICKLED_COMMON_BINDINGS, "rb") as pickle_file:
+        try:
+            common_bindings = pickle.load(pickle_file)
+        except UnsupportedOperation:
+            # pickled file doesn't exist yet
+            common_bindings = defaultdict(list)
+
+    info(pformat(dict(common_bindings)))  # TODO: remove
+
 
 # NOTE: currently makes Albert crash completely, for some reason
-# def finalize():
-#     shutil.rmtree(BINDINGS_FILE)
+def finalize():
+    #     shutil.rmtree(BINDINGS_FILE)
 
-#     # TODO: remove
-#     shutil.rmtree(os.path.join(PLUGIN_DIR, "last_results"))
+    global common_bindings
+    with open(PICKLED_COMMON_BINDINGS, "wb") as pickle_file:
+        pickle.dump(common_bindings, pickle_file)
 
 
 def handleQuery(query):
@@ -96,17 +111,23 @@ def find_binding(keyword: str) -> List[str]:
 
 
 def parse_binding_line(line: str) -> Tuple[str, str, str]:
-    bind_segments = line.split('"')
-    bind_shortcut = bind_segments[1]
-    bind_name = bind_segments[3]
-    bind_desc = " ".join(bind_segments[1:])
-    return bind_shortcut, bind_name, bind_desc
+    """Return the binding itself (e.g. '\epsilon') and shortcut (e.g. M-m ...)"""
+
+    binding_segments = line.split('"')
+    shortcut = binding_segments[1]
+    binding = binding_segments[3]
+    if " " in binding:
+        binding = binding.split()[-1]
+
+    return shortcut, binding
+
+
+def save_selection(binding: str):
+    pass
 
 
 def get_binding_items(query):
     global iconPath
-    # with open(os.path.join(PLUGIN_DIR, "last_results"), "ab") as f:
-    #     f.write("handleQuery called")
 
     binding_prefix = query.string
     if len(binding_prefix) < 3:
@@ -117,16 +138,25 @@ def get_binding_items(query):
 
     results = []
 
-    for bind_line in filtered_bindings[:5]:
-        binding_shortcut, binding_name, binding_desc = parse_binding_line(bind_line)
+    for line in filtered_bindings[:5]:
+        binding_shortcut, binding_text = parse_binding_line(line)
 
-        # TODO: add actions (copying parsed binding on item selection)
+        # info(binding_shortcut)
+        # info(binding_text)
+
         item = Item(
             id=__prettyname__,
             icon=iconPath,
-            text=binding_name,
-            subtext=binding_desc,
-            completion=query.rawString,  # TODO: change to something more useful
+            text=binding_text,
+            subtext=binding_shortcut,
+            completion=query.rawString,
+            actions=[
+                ClipAction(text="ClipAction", clipboardText=binding_text),
+                FuncAction(
+                    text='Saves selected binding in "db"',
+                    callable=lambda: save_selection(binding_text),
+                ),
+            ],
         )
 
         results.append(item)
