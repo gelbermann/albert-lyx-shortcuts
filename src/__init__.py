@@ -32,6 +32,8 @@ JSON_COMMON_BINDINGS = os.path.join(PLUGIN_DIR, "common_bindings")
 ITEMS_AMOUNT = 5
 statistics = None
 default_items = []
+all_bindings = []
+
 
 # ---------------------------------------------------------------------------- #
 #                             Albert API Functions                             #
@@ -39,12 +41,45 @@ default_items = []
 
 
 def initialize():
+    my_initialize()
+
+
+def finalize():
+    global statistics
+    info(statistics)  # TODO: remove
+    with open(JSON_COMMON_BINDINGS, "w") as f:
+        json.dump(statistics, f, cls=StatisticsEncoder)
+
+
+def handleQuery(query):
+    if not query.isTriggered:
+        return
+
+    return my_handle_query(query)
+
+
+# ---------------------------------------------------------------------------- #
+#                                Logic Functions                               #
+# ---------------------------------------------------------------------------- #
+
+
+def my_initialize():
+    # create hidden dir for plugin files
     if not os.path.exists(PLUGIN_DIR):
         os.mkdir(PLUGIN_DIR)
 
     bindings = collect_bindings()
     with open(BINDINGS_FILE, "w+") as f:
         f.write(bindings)
+
+    # TODO: combine with above 'open' block
+    global all_bindings
+    with open(BINDINGS_FILE, "r") as f:
+        all_bindings = [
+            line.expandtabs()
+            for line in f.readlines()
+            if line.startswith("\\bind") and "self-insert" not in line
+        ]
 
     global statistics
     if os.path.exists(JSON_COMMON_BINDINGS):
@@ -73,26 +108,9 @@ def initialize():
         default_items.append(item)
 
 
-def finalize():
-    global statistics
-    info(statistics)  # TODO: remove
-    with open(JSON_COMMON_BINDINGS, "w") as f:
-        json.dump(statistics, f, cls=StatisticsEncoder)
-
-
-def handleQuery(query):
-    if not query.isTriggered:
-        return
-
-    return handle_query(query)
-
-
-# ---------------------------------------------------------------------------- #
-#                                Logic Functions                               #
-# ---------------------------------------------------------------------------- #
-
-# version of `collect_bindings` relying on os module
 def collect_bindings() -> str:
+    """ Collect all LyX binding files available in user's system """
+
     def get_from_path(bindings_dir: str) -> str:
         bindings = ""
         for path, _, files in os.walk(bindings_dir):
@@ -110,18 +128,14 @@ def collect_bindings() -> str:
 
 
 def grep_binding(keyword: str, amount: int) -> List[str]:
-    # Search for keyword in file, in all lines that start with '\bind',
-    # while IGNORING bindings whose value is "self-insert"
-    command = f'grep -E "^[\\bind]" | grep -ie "{keyword}" | grep -v "self-insert" | head -{amount}'
-
-    with open(BINDINGS_FILE) as f:
-        bindings = f.read()
-    try:
-        output = subprocess.check_output(command, shell=True, input=bindings.encode())
-    except CalledProcessError:
-        info(f"Grepping for {keyword} failed")
-        return []
-    return output.decode().expandtabs().splitlines()
+    filtered_bindings = []
+    global all_bindings
+    for line in all_bindings:
+        if keyword in line:
+            filtered_bindings.append(line)
+            if len(filtered_bindings) == amount:
+                break
+    return filtered_bindings
 
 
 def parse_binding_line(line: str) -> Tuple[str, str, str]:
@@ -135,7 +149,7 @@ def parse_binding_line(line: str) -> Tuple[str, str, str]:
     return shortcut, binding
 
 
-def handle_query(query):
+def my_handle_query(query):
     if len(query.string) < MIN_QUERY_LENGTH:
         info("Short query -> displaying most common bindings")
         global default_items
@@ -152,8 +166,6 @@ def get_binding_items(query):
     results = []
     for line in filtered_bindings:
         binding_shortcut, binding_text = parse_binding_line(line)
-        # info(binding_shortcut)
-        # info(binding_text)
         item = Item(
             id=__prettyname__,
             icon=ICON_PATH,
