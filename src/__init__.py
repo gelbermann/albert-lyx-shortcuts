@@ -28,7 +28,7 @@ HOME_DIR = os.environ["HOME"]
 PLUGIN_DIR = os.path.join(HOME_DIR, ".lyx_shortcuts_plugin")
 BINDINGS_FILE = os.path.join(PLUGIN_DIR, "all_lyx_bindings")
 JSON_COMMON_BINDINGS = os.path.join(PLUGIN_DIR, "common_bindings")
-common_bindings = None
+statistics = None
 
 
 # ---------------------------------------------------------------------------- #
@@ -44,28 +44,28 @@ def initialize():
     with open(BINDINGS_FILE, "w+") as f:
         f.write(bindings)
 
-    global common_bindings
+    global statistics
     if os.path.exists(JSON_COMMON_BINDINGS):
         with open(JSON_COMMON_BINDINGS, "r") as f:
             # https://pynative.com/python-convert-json-data-into-custom-python-object/
-            common_bindings = json.load(f, cls=CBCDecoder)
+            statistics = json.load(f, cls=StatisticsDecoder)
     else:
-        common_bindings = CommonBindingsCollector()
-    info(common_bindings)  # TODO: remove
+        statistics = Statistics()
+    info(statistics)  # TODO: remove
 
 
 def finalize():
-    global common_bindings
-    info(common_bindings)  # TODO: remove
+    global statistics
+    info(statistics)  # TODO: remove
     with open(JSON_COMMON_BINDINGS, "w") as f:
-        json.dump(common_bindings, f, cls=CBCEncoder)
+        json.dump(statistics, f, cls=StatisticsEncoder)
 
 
 def handleQuery(query):
     if not query.isTriggered:
         return
 
-    return get_binding_items(query)
+    return handle_query(query)
 
 
 # ---------------------------------------------------------------------------- #
@@ -76,7 +76,7 @@ def handleQuery(query):
 def collect_bindings() -> str:
     def get_from_path(bindings_dir: str) -> str:
         bindings = ""
-        for path, dirs, files in os.walk(bindings_dir):
+        for path, _, files in os.walk(bindings_dir):
             for file in files:
                 if ".bind" not in file:
                     continue
@@ -96,10 +96,6 @@ def collect_bindings() -> str:
 
 
 def grep_binding(keyword: str, amount: int) -> List[str]:
-    if len(keyword) < 3:
-        info("Too short query string - don't bother grepping inside bindings file")
-        return []
-
     # Search for keyword in file,
     # while IGNORING bindings whose value is "self-insert" and nothing more
     command = f'grep -ie "{keyword}" | grep -v "self-insert"'
@@ -122,8 +118,18 @@ def parse_binding_line(line: str) -> Tuple[str, str, str]:
     return shortcut, binding
 
 
+def handle_query(query):
+    if len(query.string) < 3:
+        info("Too short query string - don't search for bindings")
+        global statistics
+        results = []
+
+    else:
+        return get_binding_items(query)
+
+
 def get_binding_items(query):
-    global iconPath, common_bindings
+    global iconPath
 
     binding_prefix = query.string
     filtered_bindings = grep_binding(binding_prefix, amount=5)
@@ -145,27 +151,48 @@ def get_binding_items(query):
                 #     text='Saves selected binding in "db"',
                 #     callable=lambda: common_bindings.save_selection(binding_text),
                 # ),
-                ClipAction(text="ClipAction", clipboardText=binding_text),
+                # ClipAction(text="ClipAction", clipboardText=binding_text),
+                FuncAction(
+                    text='Saves selected binding in "db"',
+                    callable=lambda: selection(binding_text, binding_shortcut),
+                ),
             ],
         )
         results.append(item)
-
     return results
 
 
-class CommonBindingsCollector:
-    def __init__(self, binding_to_count={}, count_to_bindings={}):
+# It seems that adding both FuncAction and ClipAction (or generally, more than a single Action per Item)
+# doesn't work as expected. Instead, only the first action is triggered.
+# TODO: Open an issue about this.
+# As a workaround, this function includes all the actions expected to happen on Item selection.
+def selection(binding: str, shortcut: str):
+    global statistics
+    statistics.save_selection(binding, shortcut)
+
+    # assumes `xclip` is installed # TODO: add to README.md
+    subprocess.Popen(f'echo "{binding}" | xclip -selection clipboard', shell=True)
+
+
+class Statistics:
+    def __init__(
+        self,
+        binding_to_count=dict(),
+        binding_to_shortcut=dict(),
+        count_to_bindings=dict(),
+    ):
         self.binding_to_count = defaultdict(int)
         self.binding_to_count.update(binding_to_count)
+        self.binding_to_shortcut = dict()
+        self.binding_to_shortcut.update(binding_to_shortcut)
         self.count_to_bindings = defaultdict(list)
         self.count_to_bindings.update(count_to_bindings)
 
-    def save_selection(self, binding: str):
-        info(f"Saving binding '{binding}' in db")
-        info(f"db: {pformat(self)}")
+    def save_selection(self, binding: str, shortcut: str):
         prev_count = self.binding_to_count[binding]
         self.binding_to_count[binding] += 1
         self.count_to_bindings[prev_count + 1].append(binding)
+        self.binding_to_shortcut[binding] = shortcut
 
         if prev_count != 0:
             self.count_to_bindings[prev_count].remove(binding)
@@ -174,22 +201,20 @@ class CommonBindingsCollector:
 
     # "My rule of thumb: __repr__ is for developers, __str__ is for customers."
     def __repr__(self):
-        s1 = f"Bindings -> count: \n{pformat(dict(self.binding_to_count))}"
+        s1 = f"Binding -> count: \n{pformat(dict(self.binding_to_count))}"
+        s3 = f"Binding -> shortcut: \n{pformat(dict(self.binding_to_shortcut))}"
         s2 = f"Count -> bindings with count: \n{pformat(dict(self.count_to_bindings))}"
-        return f"\n{s1}\n{s2}"
-
-    def toJson(self):
-        return json.dumps(self.__dict__)
+        return f"\n{s1}\n{s2}\n{s3}"
 
 
-class CBCEncoder(json.JSONEncoder):
+class StatisticsEncoder(json.JSONEncoder):
     """ Encoder for CommonBindingsCollector objects """
 
     def default(self, o):
         return o.__dict__
 
 
-class CBCDecoder(json.JSONDecoder):
+class StatisticsDecoder(json.JSONDecoder):
     """ Encoder for CommonBindingsCollector objects """
 
     def __init__(self, *args, **kwargs):
@@ -199,7 +224,10 @@ class CBCDecoder(json.JSONDecoder):
         if "binding_to_count" in d:
             # 'if' is required for using `object_hook`, since it operates recursively on
             # each member of every key in d
-            return CommonBindingsCollector(
-                d["binding_to_count"], d["count_to_bindings"]
+            return Statistics(
+                d["binding_to_count"],
+                d["binding_to_shortcut"],
+                # Restore integer keys from str keys (e.g. restore key 1 from serialized key "1") for d["count_to_bindings"]
+                {int(key): val for (key, val) in d["count_to_bindings"].items()},
             )
         return d
