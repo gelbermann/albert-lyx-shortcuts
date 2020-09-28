@@ -25,10 +25,8 @@ __dependencies__ = []
 
 MIN_QUERY_LENGTH = 2
 ICON_PATH = iconLookup("albert")
-HOME_DIR = os.environ["HOME"]
-PLUGIN_DIR = os.path.join(HOME_DIR, ".lyx_shortcuts_plugin")
-BINDINGS_FILE = os.path.join(PLUGIN_DIR, "all_lyx_bindings")
-JSON_COMMON_BINDINGS = os.path.join(PLUGIN_DIR, "common_bindings")
+WORKING_DIR = os.path.dirname(os.path.abspath(__file__))
+JSON_COMMON_BINDINGS_FILE = os.path.join(WORKING_DIR, "common_bindings.json")
 ITEMS_AMOUNT = 5
 statistics = None
 default_items = []
@@ -47,7 +45,7 @@ def initialize():
 def finalize():
     global statistics
     info(statistics)  # TODO: remove
-    with open(JSON_COMMON_BINDINGS, "w") as f:
+    with open(JSON_COMMON_BINDINGS_FILE, "w") as f:
         json.dump(statistics, f, cls=StatisticsEncoder)
 
 
@@ -64,26 +62,12 @@ def handleQuery(query):
 
 
 def my_initialize():
-    # create hidden dir for plugin files
-    if not os.path.exists(PLUGIN_DIR):
-        os.mkdir(PLUGIN_DIR)
-
-    bindings = collect_bindings()
-    with open(BINDINGS_FILE, "w+") as f:
-        f.write(bindings)
-
-    # TODO: combine with above 'open' block
     global all_bindings
-    with open(BINDINGS_FILE, "r") as f:
-        all_bindings = [
-            line.expandtabs()
-            for line in f.readlines()
-            if line.startswith("\\bind") and "self-insert" not in line
-        ]
+    all_bindings = collect_sys_bindings()
 
     global statistics
-    if os.path.exists(JSON_COMMON_BINDINGS):
-        with open(JSON_COMMON_BINDINGS, "r") as f:
+    if os.path.exists(JSON_COMMON_BINDINGS_FILE):
+        with open(JSON_COMMON_BINDINGS_FILE, "r") as f:
             # https://pynative.com/python-convert-json-data-into-custom-python-object/
             statistics = json.load(f, cls=StatisticsDecoder)
     else:
@@ -108,7 +92,7 @@ def my_initialize():
         default_items.append(item)
 
 
-def collect_bindings() -> str:
+def collect_sys_bindings() -> str:
     """ Collect all LyX binding files available in user's system """
 
     def get_from_path(bindings_dir: str) -> str:
@@ -121,10 +105,18 @@ def collect_bindings() -> str:
                     bindings += f.read()
         return bindings
 
+    # Default paths defined in LyX's settings
     default_bindings = get_from_path("/usr/share/lyx/bind/")
     user_bindings = get_from_path("~/.lyx/bind/")
 
-    return default_bindings + user_bindings
+    sys_bindings = default_bindings + user_bindings
+    sys_bindings = sys_bindings.expandtabs().splitlines()
+
+    return [
+        line
+        for line in sys_bindings
+        if line.startswith("\\bind") and "self-insert" not in line
+    ]
 
 
 def grep_binding(keyword: str, amount: int) -> List[str]:
@@ -275,3 +267,8 @@ class StatisticsDecoder(json.JSONDecoder):
                 {int(key): val for (key, val) in d["count_to_bindings"].items()},
             )
         return d
+
+
+# TODO: CONTINUE HERE!!!!!!!!!!!!!!!!!
+# Something went wrong with the paste operation - it pastes some gibberish. e.g. "lpha"
+# Probably an issue with escaping the '\'.
