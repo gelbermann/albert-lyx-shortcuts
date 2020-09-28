@@ -11,7 +11,6 @@ from collections import defaultdict
 from pprint import pformat
 from subprocess import CalledProcessError
 from typing import Dict, List, Tuple
-from types import SimpleNamespace as Namespace
 
 from albertv0 import *
 
@@ -22,7 +21,7 @@ __trigger__ = "l "
 __author__ = "Niv Gelbermann"
 __dependencies__ = []
 
-# -------------------------------- Global vars ------------------------------- #
+# -------------------------------- Global Vars ------------------------------- #
 
 MIN_QUERY_LENGTH = 2
 ICON_PATH = iconLookup("albert")
@@ -35,7 +34,7 @@ statistics = None
 default_items = []
 
 # ---------------------------------------------------------------------------- #
-#                                 API Functions                                #
+#                             Albert API Functions                             #
 # ---------------------------------------------------------------------------- #
 
 
@@ -186,7 +185,15 @@ def selection(binding: str, shortcut: str):
     statistics.save_selection(binding, shortcut)
 
     # assumes `xclip` is installed # TODO: add to README.md
-    subprocess.Popen(f'echo "{binding}" | xclip -selection clipboard', shell=True)
+    try:
+        subprocess.Popen(f'echo "{binding}" | xclip -selection clipboard', shell=True)
+    except subprocess.SubprocessError:
+        info('Child process, failed. Verify that you have "xclip" installed.')
+
+
+# ---------------------------------------------------------------------------- #
+#                                 Logic Classes                                #
+# ---------------------------------------------------------------------------- #
 
 
 class Statistics:
