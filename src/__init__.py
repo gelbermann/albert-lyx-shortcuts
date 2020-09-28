@@ -2,13 +2,14 @@
 
 """Loads all LyX shortcuts for quick display and selection.
 
-Usage: "lyxs <full or partial name of symbol>"""
+Usage: "l <full or partial name of symbol>"""
 
 import json
 import os
 import subprocess
 from collections import defaultdict
 from pprint import pformat
+from subprocess import CalledProcessError
 from typing import Dict, List, Tuple
 from types import SimpleNamespace as Namespace
 
@@ -17,19 +18,21 @@ from albertv0 import *
 __iid__ = "PythonInterface/v0.2"
 __prettyname__ = "Lyx Shortcuts"
 __version__ = "1.0"
-__trigger__ = "lyxs "
+__trigger__ = "l "
 __author__ = "Niv Gelbermann"
 __dependencies__ = []
 
 # -------------------------------- Global vars ------------------------------- #
 
-iconPath = iconLookup("albert")
+MIN_QUERY_LENGTH = 2
+ICON_PATH = iconLookup("albert")
 HOME_DIR = os.environ["HOME"]
 PLUGIN_DIR = os.path.join(HOME_DIR, ".lyx_shortcuts_plugin")
 BINDINGS_FILE = os.path.join(PLUGIN_DIR, "all_lyx_bindings")
 JSON_COMMON_BINDINGS = os.path.join(PLUGIN_DIR, "common_bindings")
+ITEMS_AMOUNT = 5
 statistics = None
-
+default_items = []
 
 # ---------------------------------------------------------------------------- #
 #                                 API Functions                                #
@@ -52,6 +55,23 @@ def initialize():
     else:
         statistics = Statistics()
     info(statistics)  # TODO: remove
+
+    global default_items
+    for binding, shortcut in statistics.most_common(ITEMS_AMOUNT):
+        item = Item(
+            id=__prettyname__,
+            icon=ICON_PATH,
+            text=binding,
+            subtext=shortcut,
+            completion=binding,
+            actions=[
+                FuncAction(
+                    text="Records selected binding and adds to clipboard",
+                    callable=lambda: selection(binding, shortcut),
+                ),
+            ],
+        )
+        default_items.append(item)
 
 
 def finalize():
@@ -90,25 +110,23 @@ def collect_bindings() -> str:
     return default_bindings + user_bindings
 
 
-# version of `collect_bindings` relying on bash
-# def collect_bindings() -> None:
-#     p = subprocess.call(os.path.join(os.getcwd(), "collect_bindings.sh"))
-
-
 def grep_binding(keyword: str, amount: int) -> List[str]:
-    # Search for keyword in file,
-    # while IGNORING bindings whose value is "self-insert" and nothing more
-    command = f'grep -ie "{keyword}" | grep -v "self-insert"'
+    # Search for keyword in file, in all lines that start with '\bind',
+    # while IGNORING bindings whose value is "self-insert"
+    command = f'grep -E "^[\\bind]" | grep -ie "{keyword}" | grep -v "self-insert" | head -{amount}'
 
     with open(BINDINGS_FILE) as f:
         bindings = f.read()
-    output = subprocess.check_output(command, shell=True, input=bindings.encode())
-    return output.decode().expandtabs().splitlines()[:amount]
+    try:
+        output = subprocess.check_output(command, shell=True, input=bindings.encode())
+    except CalledProcessError:
+        info(f"Grepping for {keyword} failed")
+        return []
+    return output.decode().expandtabs().splitlines()
 
 
 def parse_binding_line(line: str) -> Tuple[str, str, str]:
     """Returns the binding itself (e.g. '\epsilon') and shortcut (e.g. M-m ...)"""
-
     binding_segments = line.split('"')
     shortcut = binding_segments[1]
     binding = binding_segments[3]
@@ -119,41 +137,38 @@ def parse_binding_line(line: str) -> Tuple[str, str, str]:
 
 
 def handle_query(query):
-    if len(query.string) < 3:
-        info("Too short query string - don't search for bindings")
-        global statistics
-        results = []
+    if len(query.string) < MIN_QUERY_LENGTH:
+        info("Short query -> displaying most common bindings")
+        global default_items
+        return default_items
 
     else:
         return get_binding_items(query)
 
 
 def get_binding_items(query):
-    global iconPath
-
     binding_prefix = query.string
-    filtered_bindings = grep_binding(binding_prefix, amount=5)
+    filtered_bindings = grep_binding(binding_prefix, amount=ITEMS_AMOUNT)
 
     results = []
     for line in filtered_bindings:
-        info(line)
         binding_shortcut, binding_text = parse_binding_line(line)
         # info(binding_shortcut)
         # info(binding_text)
         item = Item(
             id=__prettyname__,
-            icon=iconPath,
+            icon=ICON_PATH,
             text=binding_text,
             subtext=binding_shortcut,
             completion=query.rawString,
             actions=[
                 # FuncAction(
-                #     text='Saves selected binding in "db"',
+                #     text='Records selected binding and adds to clipboard',
                 #     callable=lambda: common_bindings.save_selection(binding_text),
                 # ),
                 # ClipAction(text="ClipAction", clipboardText=binding_text),
                 FuncAction(
-                    text='Saves selected binding in "db"',
+                    text="Records selected binding and adds to clipboard",
                     callable=lambda: selection(binding_text, binding_shortcut),
                 ),
             ],
@@ -191,8 +206,8 @@ class Statistics:
     def save_selection(self, binding: str, shortcut: str):
         prev_count = self.binding_to_count[binding]
         self.binding_to_count[binding] += 1
-        self.count_to_bindings[prev_count + 1].append(binding)
         self.binding_to_shortcut[binding] = shortcut
+        self.count_to_bindings[prev_count + 1].append(binding)
 
         if prev_count != 0:
             self.count_to_bindings[prev_count].remove(binding)
@@ -205,6 +220,16 @@ class Statistics:
         s3 = f"Binding -> shortcut: \n{pformat(dict(self.binding_to_shortcut))}"
         s2 = f"Count -> bindings with count: \n{pformat(dict(self.count_to_bindings))}"
         return f"\n{s1}\n{s2}\n{s3}"
+
+    def most_common(self, amount: int) -> List[Tuple[str, str]]:
+        keys = sorted(self.count_to_bindings.keys())[-amount:]
+        res = []
+        for count in keys:
+            bindings = self.count_to_bindings[count]
+            for binding in bindings:
+                if len(res) != amount:
+                    res.append((binding, self.binding_to_shortcut[binding]))
+        return res
 
 
 class StatisticsEncoder(json.JSONEncoder):
